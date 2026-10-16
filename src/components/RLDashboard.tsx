@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { GameManager, type TrainingScenario } from '../game/GameManager';
-import { Play, Pause, RotateCcw, Download, Upload, Zap, Activity, Target } from 'lucide-react';
+import { Play, Pause, RotateCcw, Download, Upload, Zap, Activity, Target, Brain, RefreshCw, AlertTriangle, Check, X, CheckCircle2 } from 'lucide-react';
 
 interface RLDashboardProps {
   game: GameManager;
@@ -9,6 +9,8 @@ interface RLDashboardProps {
 export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [showResetModal, setShowResetModal] = useState<boolean>(false);
+  const [customBatchInput, setCustomBatchInput] = useState<string>('100');
 
   // Subscribe to game updates so telemetry and chart update in real time
   const [, setTick] = useState(0);
@@ -111,36 +113,60 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
     }
   }, [metrics.recentRewards, metrics.episode]);
 
+  const [loadFeedback, setLoadFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!loadFeedback) return;
+    const timer = setTimeout(() => setLoadFeedback(null), 6000);
+    return () => clearTimeout(timer);
+  }, [loadFeedback]);
+
   const handleSaveBrain = () => {
-    const json = game.agent.qNetwork.toJSON();
+    const { json, filename } = game.saveBrain();
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pool_rl_brain_ep${metrics.episode}.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    setLoadFeedback({ type: 'success', message: `Saved model snapshot: ${filename}` });
   };
 
   const handleLoadBrain = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const fileName = file.name;
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const text = event.target?.result as string;
-        game.agent.qNetwork.fromJSON(text);
-        game.agent.targetNetwork = game.agent.qNetwork.clone();
-        alert('RL Neural Network brain loaded successfully!');
-      } catch {
-        alert('Invalid brain model file.');
+        const result = game.loadBrain(text, fileName);
+        if (result.success) {
+          setLoadFeedback({ type: 'success', message: result.message });
+        } else {
+          setLoadFeedback({ type: 'error', message: result.message });
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Invalid brain model file.';
+        setLoadFeedback({ type: 'error', message: msg });
       }
     };
+    reader.onerror = () => {
+      setLoadFeedback({ type: 'error', message: 'Failed to read file from disk.' });
+    };
     reader.readAsText(file);
+    // Reset input value so user can re-upload or select same file again!
+    e.target.value = '';
+  };
+
+  const handleConfirmReset = (blank: boolean) => {
+    game.trainResetAI(blank);
+    setShowResetModal(false);
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-5xl p-4 bg-zinc-900/90 border border-zinc-800 rounded-2xl shadow-xl backdrop-blur-md">
+    <div className="relative grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-5xl p-4 bg-zinc-900/90 border border-zinc-800 rounded-2xl shadow-xl backdrop-blur-md">
       {/* 1. Metrics & Live Stats */}
       <div className="flex flex-col gap-3 p-4 bg-zinc-950/60 rounded-xl border border-zinc-800/60">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
@@ -148,6 +174,29 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
             <Activity className="w-4 h-4" /> Agent Telemetry
           </span>
           <span className="text-xs font-mono text-zinc-500">DQN Agent v2.4</span>
+        </div>
+
+        {/* Brain Model State Pill */}
+        <div className="flex items-center justify-between text-xs px-2.5 py-1.5 bg-zinc-900 rounded-lg border border-zinc-800">
+          <span className="text-zinc-400 flex items-center gap-1.5">
+            <Brain className="w-3.5 h-3.5 text-indigo-400" />
+            AI Brain:
+          </span>
+          <span
+            className={`font-bold font-mono px-2 py-0.5 rounded text-[10px] border ${
+              game.agent.brainType === 'blank'
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse'
+                : game.agent.brainType === 'loaded'
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+            }`}
+          >
+            {game.agent.brainType === 'blank'
+              ? 'Blank (Knows Nothing)'
+              : game.agent.brainType === 'loaded'
+              ? 'Custom Loaded'
+              : 'Pretrained Baseline'}
+          </span>
         </div>
 
         <div className="grid grid-cols-2 gap-2 text-center">
@@ -180,11 +229,11 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
           <input
             type="range"
             min={0.02}
-            max={0.9}
+            max={0.99}
             step={0.01}
             value={game.agent.epsilon}
             onChange={(e) => {
-              game.agent.epsilon = parseFloat(e.target.value);
+              game.setAgentEpsilon(parseFloat(e.target.value));
             }}
             className="w-full accent-emerald-500 cursor-pointer h-1.5 bg-zinc-800 rounded"
           />
@@ -278,6 +327,89 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
           </div>
         </div>
 
+        {/* Episode Goal / Auto-Stop Control */}
+        <div className="flex flex-col gap-1.5 p-2.5 bg-zinc-900/70 rounded-xl border border-zinc-800">
+          <div className="flex items-center justify-between text-[11px] font-semibold text-zinc-300">
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Episode Goal (Auto-Stop):</span>
+            </span>
+            {game.state.episodesRemaining !== null && (
+              <button
+                onClick={() => game.clearEpisodeLimit()}
+                className="text-[10px] text-rose-400 hover:text-rose-300 underline font-normal transition"
+              >
+                Cancel Goal
+              </button>
+            )}
+          </div>
+
+          {game.state.episodesRemaining !== null ? (
+            <div className="flex flex-col gap-1.5 mt-0.5">
+              <div className="flex justify-between items-center text-[11px] font-mono">
+                <span className="text-zinc-300">
+                  {game.state.episodeBatchTotal! - game.state.episodesRemaining} / {game.state.episodeBatchTotal} done
+                </span>
+                <span className="text-emerald-400 font-bold">
+                  {game.state.episodesRemaining} left (Target: #{game.state.episodeTarget})
+                </span>
+              </div>
+              <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden border border-zinc-700/60">
+                <div
+                  className="bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400 h-full transition-all duration-300"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.max(
+                        0,
+                        ((game.state.episodeBatchTotal! - game.state.episodesRemaining) /
+                          Math.max(1, game.state.episodeBatchTotal!)) *
+                          100
+                      )
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5 mt-0.5">
+              <div className="grid grid-cols-4 gap-1">
+                {[25, 50, 100, 500].map((count) => (
+                  <button
+                    key={count}
+                    onClick={() => game.setEpisodeLimit(count)}
+                    className="py-1 px-1 text-[10px] font-bold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 transition"
+                  >
+                    +{count}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={1}
+                  max={50000}
+                  value={customBatchInput}
+                  onChange={(e) => setCustomBatchInput(e.target.value)}
+                  placeholder="Custom eps..."
+                  className="flex-1 px-2 py-1 text-[11px] bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-200 font-mono outline-none focus:border-emerald-500"
+                />
+                <button
+                  onClick={() => {
+                    const parsed = parseInt(customBatchInput, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                      game.setEpisodeLimit(parsed);
+                    }
+                  }}
+                  className="px-3 py-1 text-[11px] font-bold bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/50 rounded-lg transition"
+                >
+                  Start
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Simulation Actions */}
         <div className="flex items-center gap-2 mt-1">
           <button
@@ -295,9 +427,21 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
           <button
             onClick={() => game.setupTrainingScenario()}
             className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-900 border border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
-            title="Reset Rack"
+            title="Reset Rack Balls"
           >
-            <RotateCcw className="w-3.5 h-3.5" /> Reset
+            <RotateCcw className="w-3.5 h-3.5" /> Reset Rack
+          </button>
+        </div>
+
+        {/* AI Model Train Reset Button */}
+        <div className="flex flex-col gap-1 pt-1 border-t border-zinc-800/80">
+          <button
+            onClick={() => setShowResetModal(true)}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 bg-gradient-to-r from-rose-900/50 to-orange-900/50 hover:from-rose-800/60 hover:to-orange-800/60 text-rose-200 text-xs font-bold rounded-lg border border-rose-700/60 shadow-sm transition"
+            title="Reset AI Model to Blank Slate"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+            <span>Train Reset AI Model (Blank Brain)</span>
           </button>
         </div>
 
@@ -305,19 +449,97 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
         <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/80">
           <button
             onClick={handleSaveBrain}
-            className="flex-1 flex items-center justify-center gap-1 py-1 text-[11px] bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 rounded border border-zinc-800 transition"
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[11px] font-semibold bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded-lg border border-zinc-800 transition"
           >
-            <Download className="w-3 h-3" /> Save Brain
+            <Download className="w-3.5 h-3.5 text-emerald-400" /> Save Brain
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex-1 flex items-center justify-center gap-1 py-1 text-[11px] bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 rounded border border-zinc-800 transition"
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[11px] font-semibold bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded-lg border border-zinc-800 transition"
           >
-            <Upload className="w-3 h-3" /> Load Brain
+            <Upload className="w-3.5 h-3.5 text-indigo-400" /> Load Brain
           </button>
           <input ref={fileInputRef} type="file" accept=".json" onChange={handleLoadBrain} className="hidden" />
         </div>
+
+        {/* Load/Save Feedback Toast */}
+        {loadFeedback && (
+          <div
+            className={`flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition ${
+              loadFeedback.type === 'success'
+                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 shadow-sm'
+                : 'bg-rose-950/80 border-rose-500/50 text-rose-300 shadow-sm'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 overflow-hidden">
+              {loadFeedback.type === 'success' ? (
+                <Check className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-rose-400" />
+              )}
+              <span className="truncate">{loadFeedback.message}</span>
+            </div>
+            <button
+              onClick={() => setLoadFeedback(null)}
+              className="text-zinc-400 hover:text-white p-0.5"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Confirmation Modal for Train Reset */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="flex flex-col gap-4 p-6 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl max-w-md w-full">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Train Reset AI Model</h3>
+                <p className="text-xs text-zinc-400">Initialize a fresh base brain or restore defaults</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-zinc-950/80 rounded-xl border border-zinc-800 text-xs text-zinc-300 space-y-2">
+              <p>
+                <strong className="text-rose-400">Blank Brain (Knows Nothing):</strong> Replaces all neural weights with raw random values. Clears replay memory and starts reinforcement learning completely from scratch (Tabula Rasa).
+              </p>
+              <p className="text-zinc-400">
+                <strong className="text-emerald-400">Pretrained Baseline:</strong> Restores the default bootstrap billiard intuition.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => handleConfirmReset(true)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-gradient-to-r from-rose-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
+              >
+                <Brain className="w-4 h-4" />
+                <span>Reset to Blank Brain (Knows Nothing)</span>
+              </button>
+
+              <button
+                onClick={() => handleConfirmReset(false)}
+                className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-xs rounded-xl border border-zinc-700 transition"
+              >
+                <Check className="w-4 h-4 text-emerald-400" />
+                <span>Reset to Pretrained Heuristics</span>
+              </button>
+
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 text-zinc-400 hover:text-zinc-200 text-xs font-semibold transition"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Cancel</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

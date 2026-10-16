@@ -32,10 +32,13 @@ export interface TrainingMetrics {
   recentWinRate: number;
 }
 
+export type BrainType = 'blank' | 'pretrained' | 'loaded';
+
 export class PoolAgent {
   qNetwork: NeuralNetwork;
   targetNetwork: NeuralNetwork;
   replayBuffer: ReplayBuffer;
+  brainType: BrainType = 'pretrained';
 
   // Hyperparameters
   epsilon = 0.25;
@@ -419,12 +422,38 @@ export class PoolAgent {
     this.metrics.recentWinRate = Math.round((this.metrics.winCount / Math.max(1, this.metrics.episode)) * 100);
   }
 
-  reset(): void {
+  /**
+   * Reset AI to a fresh blank brain with random weights that knows basically nothing
+   */
+  resetToBlank(): void {
+    const layerSizes = [14, 32, 32, 1];
+    this.qNetwork = new NeuralNetwork(layerSizes, this.learningRate);
+    this.targetNetwork = this.qNetwork.clone();
+    this.replayBuffer.clear();
+    this.epsilon = 0.95; // High exploration for brand new tabula-rasa brain
+    this.brainType = 'blank';
+    this.metrics = {
+      episode: 0,
+      totalPots: 0,
+      winCount: 0,
+      epsilon: 0.95,
+      loss: 0,
+      recentRewards: [],
+      averageReward: 0,
+      recentWinRate: 0,
+    };
+  }
+
+  /**
+   * Reset AI to baseline brain with pre-trained heuristics
+   */
+  resetToPretrained(): void {
     const layerSizes = [14, 32, 32, 1];
     this.qNetwork = new NeuralNetwork(layerSizes, this.learningRate);
     this.targetNetwork = this.qNetwork.clone();
     this.replayBuffer.clear();
     this.epsilon = 0.35;
+    this.brainType = 'pretrained';
     this.initializeBaselineWeights();
     this.metrics = {
       episode: 0,
@@ -436,5 +465,93 @@ export class PoolAgent {
       averageReward: 0,
       recentWinRate: 0,
     };
+  }
+
+  reset(): void {
+    this.resetToBlank();
+  }
+
+  exportBrain(): string {
+    const saveData = {
+      format: 'cuemaster-rl-brain',
+      version: '2.4',
+      timestamp: Date.now(),
+      brainType: this.brainType,
+      epsilon: this.epsilon,
+      learningRate: this.learningRate,
+      metrics: {
+        episode: this.metrics.episode,
+        totalPots: this.metrics.totalPots,
+        winCount: this.metrics.winCount,
+        epsilon: this.epsilon,
+        loss: this.metrics.loss,
+        recentRewards: [...this.metrics.recentRewards],
+        averageReward: this.metrics.averageReward,
+        recentWinRate: this.metrics.recentWinRate,
+      },
+      qNetwork: JSON.parse(this.qNetwork.toJSON()),
+    };
+    return JSON.stringify(saveData, null, 2);
+  }
+
+  loadBrain(jsonStrOrObj: string | Record<string, unknown>, fileName?: string): { success: boolean; message: string } {
+    try {
+      const data = typeof jsonStrOrObj === 'string' ? JSON.parse(jsonStrOrObj) : jsonStrOrObj;
+
+      // 1. Load weights into qNetwork
+      this.qNetwork.fromJSON(data);
+      this.targetNetwork = this.qNetwork.clone();
+
+      // 2. Clear replay buffer of old transitions
+      this.replayBuffer.clear();
+
+      // 3. Restore metrics and exploration
+      if (data && typeof data === 'object' && 'metrics' in data && data.metrics && typeof data.metrics === 'object') {
+        const m = data.metrics as Partial<TrainingMetrics>;
+        this.metrics = {
+          episode: typeof m.episode === 'number' ? m.episode : 0,
+          totalPots: typeof m.totalPots === 'number' ? m.totalPots : 0,
+          winCount: typeof m.winCount === 'number' ? m.winCount : 0,
+          epsilon: typeof m.epsilon === 'number' ? m.epsilon : this.epsilon,
+          loss: typeof m.loss === 'number' ? m.loss : 0,
+          recentRewards: Array.isArray(m.recentRewards) ? [...m.recentRewards] : [],
+          averageReward: typeof m.averageReward === 'number' ? m.averageReward : 0,
+          recentWinRate: typeof m.recentWinRate === 'number' ? m.recentWinRate : 0,
+        };
+        if ('epsilon' in data && typeof data.epsilon === 'number') {
+          this.epsilon = Math.max(this.minEpsilon, Math.min(0.99, data.epsilon));
+        } else if (typeof m.epsilon === 'number') {
+          this.epsilon = Math.max(this.minEpsilon, Math.min(0.99, m.epsilon));
+        }
+      } else {
+        // Fallback for legacy format files
+        let ep = 0;
+        if (fileName) {
+          const match = fileName.match(/_ep(\d+)/i);
+          if (match) {
+            ep = parseInt(match[1], 10);
+          }
+        }
+        if (ep === 0 && data && typeof data === 'object' && 't' in data && typeof data.t === 'number' && data.t > 0) {
+          ep = Math.round(data.t / 5);
+        }
+        this.metrics = {
+          episode: ep,
+          totalPots: 0,
+          winCount: 0,
+          epsilon: this.epsilon,
+          loss: 0,
+          recentRewards: [],
+          averageReward: 0,
+          recentWinRate: 0,
+        };
+      }
+
+      this.brainType = 'loaded';
+      return { success: true, message: `Brain loaded successfully (Episode ${this.metrics.episode})` };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Invalid brain model file.';
+      return { success: false, message: msg };
+    }
   }
 }

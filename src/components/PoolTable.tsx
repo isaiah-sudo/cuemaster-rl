@@ -1,8 +1,9 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { GameManager } from '../game/GameManager';
 import { TABLE_CONFIG } from '../physics/constants';
 import { Vector2D } from '../physics/Vector2D';
 import { Ball } from '../physics/Ball';
+import { Lock, Unlock, Flame, Crosshair, Keyboard, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface PoolTableProps {
   game: GameManager;
@@ -12,109 +13,24 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [aimAngle, setAimAngle] = useState<number>(0);
   const [shotPower, setShotPower] = useState<number>(14);
-  const [isDraggingAim, setIsDraggingAim] = useState<boolean>(false);
-  const [isPullingCue, setIsPullingCue] = useState<boolean>(false);
-  const [dragStartPos, setDragStartPos] = useState<Vector2D | null>(null);
+  const [isAimLocked, setIsAimLocked] = useState<boolean>(false);
 
   // Sync state on change
   const [, setTickState] = useState({});
 
   useEffect(() => {
-    const unsub = game.subscribe(() => {
+    const unsub = game.subscribe((state) => {
+      if (state.isSimulating) {
+        setIsAimLocked(false);
+      }
       setTickState({});
     });
     return unsub;
   }, [game]);
 
-  // Main animation / render loop
-  useEffect(() => {
-    let animId: number;
-
-    const render = () => {
-      game.tick();
-
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          drawScene(ctx);
-        }
-      }
-
-      animId = requestAnimationFrame(render);
-    };
-
-    animId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animId);
-  }, [game, aimAngle, shotPower, isPullingCue]);
-
-  const drawScene = (ctx: CanvasRenderingContext2D) => {
-    const { TOTAL_WIDTH, TOTAL_HEIGHT, FELT_X, FELT_Y, FELT_WIDTH, FELT_HEIGHT } = TABLE_CONFIG;
-
-    ctx.clearRect(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT);
-
-    // 1. Wooden Outer Rails
-    const woodGrad = ctx.createLinearGradient(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT);
-    woodGrad.addColorStop(0, '#2e190d');
-    woodGrad.addColorStop(0.5, '#452614');
-    woodGrad.addColorStop(1, '#2e190d');
-    ctx.fillStyle = woodGrad;
-    ctx.beginPath();
-    ctx.roundRect(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT, 16);
-    ctx.fill();
-
-    // Wood border bevel highlight
-    ctx.strokeStyle = '#5a341d';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.roundRect(2, 2, TOTAL_WIDTH - 4, TOTAL_HEIGHT - 4, 14);
-    ctx.stroke();
-
-    // Inlaid Mother-of-Pearl Sights / Diamonds along rails
-    drawDiamonds(ctx);
-
-    // 2. Billiard Green Felt Table Surface
-    const feltGrad = ctx.createRadialGradient(
-      FELT_X + FELT_WIDTH / 2,
-      FELT_Y + FELT_HEIGHT / 2,
-      50,
-      FELT_X + FELT_WIDTH / 2,
-      FELT_Y + FELT_HEIGHT / 2,
-      FELT_WIDTH * 0.7
-    );
-    feltGrad.addColorStop(0, '#107a4b');
-    feltGrad.addColorStop(0.7, '#0c623b');
-    feltGrad.addColorStop(1, '#094d2e');
-
-    ctx.fillStyle = feltGrad;
-    ctx.fillRect(FELT_X, FELT_Y, FELT_WIDTH, FELT_HEIGHT);
-
-    // Subtle table markings
-    drawTableMarkings(ctx);
-
-    // 3. Cushion Rubber Lips
-    drawCushions(ctx);
-
-    // 4. Metallic Pockets
-    drawPockets(ctx);
-
-    // 5. Draw Visualizer Rays (AI candidate shots or Player Aim Guide)
-    if (game.state.mode === 'training') {
-      drawAITrainingThoughtRays(ctx);
-    } else if (game.state.turn === 'player' && !game.state.isSimulating && !game.state.winner) {
-      drawPlayerAimAssist(ctx);
-    }
-
-    // 6. Draw Balls
-    for (const ball of game.table.balls) {
-      ball.draw(ctx);
-    }
-
-    // 7. Draw Cue Stick
-    if (game.state.mode === 'match' && game.state.turn === 'player' && !game.state.isSimulating && !game.state.winner) {
-      drawCueStick(ctx);
-    }
-  };
+  const isPlayerCanShoot =
+    (game.state.mode === 'match' && game.state.turn === 'player' && !game.state.isSimulating && !game.state.winner) ||
+    (game.state.mode === 'training' && game.state.isTrainingPaused && !game.state.isSimulating);
 
   const drawDiamonds = (ctx: CanvasRenderingContext2D) => {
     const { FELT_X, FELT_Y, FELT_WIDTH, FELT_HEIGHT, RAIL_WIDTH } = TABLE_CONFIG;
@@ -303,17 +219,17 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
     ctx.beginPath();
     ctx.moveTo(cue.pos.x, cue.pos.y);
     ctx.lineTo(impactPoint.x, impactPoint.y);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = isAimLocked ? '#f59e0b' : 'rgba(255, 255, 255, 0.65)';
+    ctx.lineWidth = isAimLocked ? 2.5 : 1.5;
+    ctx.setLineDash(isAimLocked ? [] : [5, 5]);
     ctx.stroke();
 
     // 2. Ghost cue ball at impact point
     if (closestBall) {
       ctx.beginPath();
       ctx.arc(impactPoint.x, impactPoint.y, cue.radius, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = isAimLocked ? '#fbbf24' : 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = isAimLocked ? 2.2 : 1.8;
       ctx.setLineDash([3, 3]);
       ctx.stroke();
 
@@ -324,7 +240,7 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
       ctx.moveTo(closestBall.pos.x, closestBall.pos.y);
       ctx.lineTo(targetTrajectory.x, targetTrajectory.y);
       ctx.strokeStyle = '#38bdf8'; // Sky blue for target path
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.setLineDash([]);
       ctx.stroke();
 
@@ -339,6 +255,14 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
       ctx.lineWidth = 1.2;
       ctx.setLineDash([2, 4]);
       ctx.stroke();
+    }
+
+    // 3. Floating Locked badge directly on canvas
+    if (isAimLocked) {
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('🔒 AIM LOCKED', impactPoint.x, impactPoint.y - 18);
     }
 
     ctx.restore();
@@ -382,64 +306,243 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
     ctx.restore();
   };
 
-  // Mouse / Touch handlers for aiming & shooting
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (game.state.turn !== 'player' || game.state.isSimulating || game.state.winner) return;
+  const drawScene = (ctx: CanvasRenderingContext2D) => {
+    const { TOTAL_WIDTH, TOTAL_HEIGHT, FELT_X, FELT_Y, FELT_WIDTH, FELT_HEIGHT } = TABLE_CONFIG;
 
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = ((e.clientX - rect.left) / rect.width) * TABLE_CONFIG.TOTAL_WIDTH;
-    const y = ((e.clientY - rect.top) / rect.height) * TABLE_CONFIG.TOTAL_HEIGHT;
-    const mousePos = new Vector2D(x, y);
+    ctx.clearRect(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT);
 
-    const cue = game.table.getCueBall();
+    // 1. Wooden Outer Rails
+    const woodGrad = ctx.createLinearGradient(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT);
+    woodGrad.addColorStop(0, '#2e190d');
+    woodGrad.addColorStop(0.5, '#452614');
+    woodGrad.addColorStop(1, '#2e190d');
+    ctx.fillStyle = woodGrad;
+    ctx.beginPath();
+    ctx.roundRect(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT, 16);
+    ctx.fill();
 
-    // If cue is clicked or pulled back, start power pull
-    const distToCue = mousePos.dist(cue.pos);
-    if (distToCue < 40) {
-      setIsPullingCue(true);
-      setDragStartPos(mousePos);
-    } else {
-      setIsDraggingAim(true);
-      updateAimFromMouse(mousePos);
+    // Wood border bevel highlight
+    ctx.strokeStyle = '#5a341d';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.roundRect(2, 2, TOTAL_WIDTH - 4, TOTAL_HEIGHT - 4, 14);
+    ctx.stroke();
+
+    // Inlaid Mother-of-Pearl Sights / Diamonds along rails
+    drawDiamonds(ctx);
+
+    // 2. Billiard Green Felt Table Surface
+    const feltGrad = ctx.createRadialGradient(
+      FELT_X + FELT_WIDTH / 2,
+      FELT_Y + FELT_HEIGHT / 2,
+      50,
+      FELT_X + FELT_WIDTH / 2,
+      FELT_Y + FELT_HEIGHT / 2,
+      FELT_WIDTH * 0.7
+    );
+    feltGrad.addColorStop(0, '#107a4b');
+    feltGrad.addColorStop(0.7, '#0c623b');
+    feltGrad.addColorStop(1, '#094d2e');
+
+    ctx.fillStyle = feltGrad;
+    ctx.fillRect(FELT_X, FELT_Y, FELT_WIDTH, FELT_HEIGHT);
+
+    // Subtle table markings
+    drawTableMarkings(ctx);
+
+    // 3. Cushion Rubber Lips
+    drawCushions(ctx);
+
+    // 4. Metallic Pockets
+    drawPockets(ctx);
+
+    // 5. Draw Visualizer Rays (AI candidate shots or Player Aim Guide)
+    if (game.state.mode === 'training' && !game.state.isTrainingPaused) {
+      drawAITrainingThoughtRays(ctx);
+    } else if (isPlayerCanShoot) {
+      drawPlayerAimAssist(ctx);
     }
+
+    // 6. Draw Balls
+    for (const ball of game.table.balls) {
+      ball.draw(ctx);
+    }
+
+    // 7. Draw Cue Stick
+    if (isPlayerCanShoot) {
+      drawCueStick(ctx);
+    }
+  };
+
+  const drawSceneRef = useRef(drawScene);
+  useEffect(() => {
+    drawSceneRef.current = drawScene;
+  });
+
+  // Main animation / render loop
+  useEffect(() => {
+    let animId: number;
+
+    const render = () => {
+      game.tick();
+
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          drawSceneRef.current(ctx);
+        }
+      }
+
+      animId = requestAnimationFrame(render);
+    };
+
+    animId = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(animId);
+  }, [game]);
+
+  const firePlayerShot = useCallback(() => {
+    if (!isPlayerCanShoot) return;
+    setIsAimLocked(false);
+    game.executePlayerShot(aimAngle, shotPower);
+  }, [isPlayerCanShoot, game, aimAngle, shotPower]);
+
+  // Mouse / Touch handlers for aiming & locking
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isPlayerCanShoot) return;
+
+    if (e.button === 2) {
+      // Right-click: unlock shot
+      e.preventDefault();
+      setIsAimLocked(false);
+      return;
+    }
+
+    if (e.button === 0) {
+      // Left-click: update angle to clicked point and lock in shot!
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const x = ((e.clientX - rect.left) / rect.width) * TABLE_CONFIG.TOTAL_WIDTH;
+      const y = ((e.clientY - rect.top) / rect.height) * TABLE_CONFIG.TOTAL_HEIGHT;
+      const mousePos = new Vector2D(x, y);
+
+      const cue = game.table.getCueBall();
+      const dir = mousePos.sub(cue.pos);
+      if (dir.mag() > 1) {
+        setAimAngle(dir.heading());
+      }
+      setIsAimLocked(true);
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!isPlayerCanShoot) return;
+    // Right-click unlocks the shot
+    setIsAimLocked(false);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // If locked, lock in current shot and do NOT track cursor
+    if (isAimLocked) return;
+    if (!isPlayerCanShoot) return;
+
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ((e.clientX - rect.left) / rect.width) * TABLE_CONFIG.TOTAL_WIDTH;
     const y = ((e.clientY - rect.top) / rect.height) * TABLE_CONFIG.TOTAL_HEIGHT;
     const mousePos = new Vector2D(x, y);
 
-    if (isPullingCue && dragStartPos) {
-      const cue = game.table.getCueBall();
-      const pullDist = mousePos.dist(cue.pos);
-      const power = Math.max(
-        TABLE_CONFIG.MIN_SHOT_POWER,
-        Math.min(TABLE_CONFIG.MAX_SHOT_POWER, (pullDist / 100) * TABLE_CONFIG.MAX_SHOT_POWER)
-      );
-      setShotPower(power);
-    } else if (isDraggingAim || (!game.state.isSimulating && game.state.turn === 'player')) {
-      updateAimFromMouse(mousePos);
-    }
-  };
-
-  const handleMouseUp = () => {
-    if (isPullingCue) {
-      setIsPullingCue(false);
-      setDragStartPos(null);
-      // Fire shot!
-      game.executePlayerShot(aimAngle, shotPower);
-    }
-    setIsDraggingAim(false);
-  };
-
-  const updateAimFromMouse = (mousePos: Vector2D) => {
     const cue = game.table.getCueBall();
     const dir = mousePos.sub(cue.pos);
-    setAimAngle(dir.heading());
+    if (dir.mag() > 1) {
+      setAimAngle(dir.heading());
+    }
   };
+
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (!isPlayerCanShoot) return;
+    e.preventDefault();
+    setShotPower((prev) => {
+      const delta = e.deltaY < 0 ? 1.0 : -1.0;
+      return Math.max(TABLE_CONFIG.MIN_SHOT_POWER, Math.min(TABLE_CONFIG.MAX_SHOT_POWER, +(prev + delta).toFixed(1)));
+    });
+  };
+
+  // Keyboard Hotkeys
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if typing in a text field
+      if (
+        (e.target instanceof HTMLInputElement && e.target.type !== 'range') ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
+      if (!isPlayerCanShoot) return;
+
+      // 1. Strike ball hotkeys: Space, Enter, or F
+      if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyF') {
+        e.preventDefault();
+        firePlayerShot();
+        return;
+      }
+
+      // 2. Lock / Unlock hotkeys: L to toggle, Escape to unlock
+      if (e.code === 'KeyL') {
+        e.preventDefault();
+        setIsAimLocked((prev) => !prev);
+        return;
+      }
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        setIsAimLocked(false);
+        return;
+      }
+
+      // 3. Power adjustment: W / Up (+1.5), S / Down (-1.5)
+      if (e.code === 'KeyW' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        setShotPower((prev) => Math.min(TABLE_CONFIG.MAX_SHOT_POWER, +(prev + 1.5).toFixed(1)));
+        return;
+      }
+      if (e.code === 'KeyS' || e.code === 'ArrowDown') {
+        e.preventDefault();
+        setShotPower((prev) => Math.max(TABLE_CONFIG.MIN_SHOT_POWER, +(prev - 1.5).toFixed(1)));
+        return;
+      }
+
+      // 4. Power numerical presets 1-9, 0 (10% to 100%)
+      if (e.code >= 'Digit1' && e.code <= 'Digit9') {
+        const num = parseInt(e.key, 10);
+        const fraction = num / 10;
+        const powerRange = TABLE_CONFIG.MAX_SHOT_POWER - TABLE_CONFIG.MIN_SHOT_POWER;
+        setShotPower(+(TABLE_CONFIG.MIN_SHOT_POWER + fraction * powerRange).toFixed(1));
+        return;
+      }
+      if (e.code === 'Digit0') {
+        setShotPower(TABLE_CONFIG.MAX_SHOT_POWER);
+        return;
+      }
+
+      // 5. Fine aim adjustment: A / Left arrow counter-clockwise, D / Right arrow clockwise
+      const aimStep = e.shiftKey ? 0.008 : 0.03;
+      if (e.code === 'KeyA' || e.code === 'ArrowLeft') {
+        e.preventDefault();
+        setAimAngle((prev) => prev - aimStep);
+        return;
+      }
+      if (e.code === 'KeyD' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        setAimAngle((prev) => prev + aimStep);
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlayerCanShoot, aimAngle, shotPower, firePlayerShot]);
 
   return (
     <div className="relative flex flex-col items-center justify-center p-3 select-none">
@@ -448,17 +551,14 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
           ref={canvasRef}
           width={TABLE_CONFIG.TOTAL_WIDTH}
           height={TABLE_CONFIG.TOTAL_HEIGHT}
-          className="rounded-xl cursor-crosshair max-w-full h-auto block"
+          className={`rounded-xl max-w-full h-auto block ${isAimLocked ? 'cursor-default' : 'cursor-crosshair'}`}
           onMouseDown={handleMouseDown}
+          onContextMenu={handleContextMenu}
           onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={() => {
-            setIsDraggingAim(false);
-            setIsPullingCue(false);
-          }}
+          onWheel={handleWheel}
         />
 
-        {/* Turn Overlay Badge */}
+        {/* Turn Overlay Badge (Top Left) */}
         <div className="absolute top-4 left-6 flex items-center gap-2">
           {game.state.mode === 'match' ? (
             <div
@@ -484,6 +584,23 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
           </div>
         </div>
 
+        {/* Shot Lock / Aim State Banner (Top Right) */}
+        {isPlayerCanShoot && (
+          <div className="absolute top-4 right-6 flex items-center gap-2">
+            {isAimLocked ? (
+              <div className="px-3 py-1.5 rounded-full text-xs font-bold tracking-wide border shadow-lg flex items-center gap-1.5 bg-amber-500/25 border-amber-500/60 text-amber-300 backdrop-blur-md animate-pulse">
+                <Lock className="w-3.5 h-3.5 text-amber-400" />
+                <span>Aim Locked • Set Power & Hit Fire (Right-Click to Unlock)</span>
+              </div>
+            ) : (
+              <div className="px-3 py-1.5 rounded-full text-xs font-medium tracking-wide border shadow-md flex items-center gap-1.5 bg-black/70 border-stone-700/70 text-stone-300 backdrop-blur-md">
+                <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Click to Lock Shot | Space to Fire</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Foul banner alert */}
         {game.state.foulMessage && (
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 bg-rose-950/90 border border-rose-500/60 text-rose-200 text-xs font-bold rounded-lg shadow-xl backdrop-blur-md animate-bounce">
@@ -492,49 +609,109 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
         )}
       </div>
 
-      {/* Quick Player Aim & Power Controls (Below Table) */}
-      {game.state.mode === 'match' && game.state.turn === 'player' && !game.state.winner && (
-        <div className="mt-3 flex flex-wrap items-center justify-center gap-4 p-3 bg-stone-900/80 border border-stone-800 rounded-xl backdrop-blur-md w-full max-w-3xl">
-          <div className="flex items-center gap-2 text-xs text-stone-400 font-semibold uppercase">
-            <span>Power:</span>
-            <input
-              type="range"
-              min={TABLE_CONFIG.MIN_SHOT_POWER}
-              max={TABLE_CONFIG.MAX_SHOT_POWER}
-              step={0.5}
-              value={shotPower}
-              onChange={(e) => setShotPower(parseFloat(e.target.value))}
-              className="w-32 accent-emerald-500 cursor-pointer"
-            />
-            <span className="text-emerald-400 font-mono w-10 text-right">
-              {Math.round((shotPower / TABLE_CONFIG.MAX_SHOT_POWER) * 100)}%
+      {/* Player Aim, Power & Fire Controls (Below Table) */}
+      {isPlayerCanShoot && (
+        <div className="mt-3 flex flex-col items-center gap-2.5 p-3.5 bg-stone-900/90 border border-stone-800 rounded-2xl backdrop-blur-md w-full max-w-4xl shadow-xl">
+          {/* Main Action Strip */}
+          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 w-full">
+            {/* Lock / Unlock Toggle Button */}
+            <button
+              onClick={() => setIsAimLocked((prev) => !prev)}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold border transition ${
+                isAimLocked
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 shadow-md shadow-amber-950/40 hover:bg-amber-500/30'
+                  : 'bg-stone-800 border-stone-700 text-stone-300 hover:bg-stone-700'
+              }`}
+              title={isAimLocked ? 'Right-click canvas or click here to unlock aim' : 'Click canvas or here to lock aim'}
+            >
+              {isAimLocked ? <Lock className="w-4 h-4 text-amber-400" /> : <Unlock className="w-4 h-4 text-stone-400" />}
+              <span>{isAimLocked ? 'Aim Locked' : 'Aim Tracking'}</span>
+              <span className="text-[10px] opacity-70 font-mono">({isAimLocked ? 'Right-Click' : 'Click'})</span>
+            </button>
+
+            {/* Power Adjustment Slider & Quick Presets */}
+            <div className="flex items-center gap-2 text-xs text-stone-300 font-semibold">
+              <span className="uppercase text-stone-400 font-bold">Power:</span>
+              <input
+                type="range"
+                min={TABLE_CONFIG.MIN_SHOT_POWER}
+                max={TABLE_CONFIG.MAX_SHOT_POWER}
+                step={0.5}
+                value={shotPower}
+                onChange={(e) => setShotPower(parseFloat(e.target.value))}
+                className="w-24 sm:w-32 accent-emerald-500 cursor-pointer"
+              />
+              <span className="text-emerald-400 font-mono w-10 text-right font-bold">
+                {Math.round((shotPower / TABLE_CONFIG.MAX_SHOT_POWER) * 100)}%
+              </span>
+
+              {/* Quick Preset Buttons */}
+              <div className="hidden sm:flex items-center gap-1 ml-1">
+                {[
+                  { label: 'Min', val: TABLE_CONFIG.MIN_SHOT_POWER },
+                  { label: '50%', val: TABLE_CONFIG.MAX_SHOT_POWER * 0.5 },
+                  { label: '75%', val: TABLE_CONFIG.MAX_SHOT_POWER * 0.75 },
+                  { label: 'Max', val: TABLE_CONFIG.MAX_SHOT_POWER },
+                ].map(({ label, val }) => (
+                  <button
+                    key={label}
+                    onClick={() => setShotPower(+val.toFixed(1))}
+                    className="px-2 py-1 text-[10px] font-bold bg-stone-800 hover:bg-stone-700 text-stone-300 rounded border border-stone-700 transition"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Fine Aim Buttons */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setAimAngle((prev) => prev - 0.03)}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-lg border border-stone-700 transition"
+                title="Fine aim counter-clockwise [A]"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span>Fine Left [A]</span>
+              </button>
+              <button
+                onClick={() => setAimAngle((prev) => prev + 0.03)}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-lg border border-stone-700 transition"
+                title="Fine aim clockwise [D]"
+              >
+                <span>Fine Right [D]</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* FIRE BUTTON */}
+            <button
+              onClick={firePlayerShot}
+              disabled={game.state.isSimulating}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm tracking-wide shadow-xl transition transform active:scale-95 disabled:opacity-50 ${
+                isAimLocked
+                  ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-white shadow-amber-950/60 ring-2 ring-amber-400/50 animate-pulse'
+                  : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-950/50'
+              }`}
+            >
+              <Flame className="w-4 h-4 text-amber-200" />
+              <span>FIRE SHOT [Space]</span>
+            </button>
+          </div>
+
+          {/* Hotkey Cheatsheet Bar */}
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-stone-400 pt-2 border-t border-stone-800/80 w-full font-medium">
+            <span className="flex items-center gap-1 text-emerald-400">
+              <Keyboard className="w-3.5 h-3.5" />
+              <strong>Hotkeys:</strong>
             </span>
+            <span><kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-700 text-stone-200 font-mono text-[10px]">Left Click</kbd> Lock Shot</span>
+            <span><kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-700 text-stone-200 font-mono text-[10px]">Right Click / Esc</kbd> Unlock</span>
+            <span><kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-700 text-stone-200 font-mono text-[10px]">Space / Enter / F</kbd> Fire</span>
+            <span><kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-700 text-stone-200 font-mono text-[10px]">W / S or ↑ / ↓ or Scroll</kbd> Power</span>
+            <span><kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-700 text-stone-200 font-mono text-[10px]">A / D or ← / →</kbd> Aim</span>
+            <span><kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-700 text-stone-200 font-mono text-[10px]">1-9</kbd> Power Presets</span>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAimAngle((prev) => prev - 0.03)}
-              className="px-2.5 py-1 text-xs bg-stone-800 hover:bg-stone-700 text-stone-300 rounded border border-stone-700 transition"
-              title="Fine aim counter-clockwise"
-            >
-              ↺ Fine Left
-            </button>
-            <button
-              onClick={() => setAimAngle((prev) => prev + 0.03)}
-              className="px-2.5 py-1 text-xs bg-stone-800 hover:bg-stone-700 text-stone-300 rounded border border-stone-700 transition"
-              title="Fine aim clockwise"
-            >
-              Fine Right ↻
-            </button>
-          </div>
-
-          <button
-            onClick={() => game.executePlayerShot(aimAngle, shotPower)}
-            disabled={game.state.isSimulating}
-            className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm rounded-lg shadow-lg shadow-emerald-900/30 transition transform active:scale-95 disabled:opacity-50"
-          >
-            🎱 Strike Cue Ball
-          </button>
         </div>
       )}
     </div>

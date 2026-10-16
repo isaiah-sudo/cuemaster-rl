@@ -187,21 +187,74 @@ export class NeuralNetwork {
   toJSON(): string {
     return JSON.stringify({
       layers: this.layers.map((l) => ({
-        weights: l.weights,
-        biases: l.biases,
+        weights: l.weights.map((row) => [...row]),
+        biases: [...l.biases],
       })),
       learningRate: this.learningRate,
       t: this.t,
     });
   }
 
-  fromJSON(jsonStr: string): void {
-    const data = JSON.parse(jsonStr);
-    this.learningRate = data.learningRate || this.learningRate;
-    this.t = data.t || 0;
-    for (let l = 0; l < data.layers.length; l++) {
-      this.layers[l].weights = data.layers[l].weights;
-      this.layers[l].biases = data.layers[l].biases;
+  fromJSON(jsonStrOrObj: string | Record<string, unknown>): void {
+    const raw = typeof jsonStrOrObj === 'string' ? JSON.parse(jsonStrOrObj) : jsonStrOrObj;
+    // Support nested qNetwork or direct network object
+    const data = (raw && typeof raw === 'object' && 'qNetwork' in raw && raw.qNetwork)
+      ? (raw.qNetwork as Record<string, unknown>)
+      : (raw as Record<string, unknown>);
+
+    if (!data || !Array.isArray(data.layers) || data.layers.length === 0) {
+      throw new Error('Invalid neural network format: missing layers array.');
     }
+
+    if (typeof data.learningRate === 'number' && !isNaN(data.learningRate)) {
+      this.learningRate = data.learningRate;
+    }
+    if (typeof data.t === 'number' && !isNaN(data.t)) {
+      this.t = data.t;
+    }
+
+    // Reconstruct all layers cleanly with properly sized Adam momentum arrays
+    const newLayers: typeof this.layers = [];
+    for (let l = 0; l < data.layers.length; l++) {
+      const srcLayer = data.layers[l];
+      if (!srcLayer || !Array.isArray(srcLayer.weights) || !Array.isArray(srcLayer.biases)) {
+        throw new Error(`Corrupted neural network layer at index ${l}.`);
+      }
+
+      const outSize = srcLayer.weights.length;
+      if (outSize === 0 || !Array.isArray(srcLayer.weights[0])) {
+        throw new Error(`Invalid layer weight dimensions at index ${l}.`);
+      }
+      const inSize = srcLayer.weights[0].length;
+
+      // Validate input features on first layer (must be 14 dimensions)
+      if (l === 0 && inSize !== 14) {
+        throw new Error(`Incompatible model input size: Expected 14 features, found ${inSize}.`);
+      }
+
+      const weights: number[][] = [];
+      const mWeights: number[][] = [];
+      const vWeights: number[][] = [];
+      const biases: number[] = [...srcLayer.biases];
+      const mBiases: number[] = new Array(outSize).fill(0);
+      const vBiases: number[] = new Array(outSize).fill(0);
+
+      for (let o = 0; o < outSize; o++) {
+        weights[o] = [...srcLayer.weights[o]];
+        mWeights[o] = new Array(inSize).fill(0);
+        vWeights[o] = new Array(inSize).fill(0);
+      }
+
+      newLayers.push({
+        weights,
+        biases,
+        mWeights,
+        vWeights,
+        mBiases,
+        vBiases,
+      });
+    }
+
+    this.layers = newLayers;
   }
 }

@@ -27,6 +27,9 @@ export interface GameState {
   currentCandidate: CandidateShot | null;
   allCandidates: CandidateShot[];
   lastShotReward: number | null;
+  episodeTarget: number | null;
+  episodesRemaining: number | null;
+  episodeBatchTotal: number | null;
 }
 
 export class GameManager {
@@ -92,6 +95,9 @@ export class GameManager {
       currentCandidate: null,
       allCandidates: [],
       lastShotReward: null,
+      episodeTarget: null,
+      episodesRemaining: null,
+      episodeBatchTotal: null,
     };
 
     this.setupTrainingScenario();
@@ -105,7 +111,7 @@ export class GameManager {
     };
   }
 
-  private notify(): void {
+  notify(): void {
     for (const listener of this.listeners) {
       listener(this.state);
     }
@@ -132,9 +138,45 @@ export class GameManager {
     this.notify();
   }
 
+  setAgentEpsilon(epsilon: number): void {
+    this.agent.epsilon = Math.max(0.01, Math.min(1.0, epsilon));
+    this.notify();
+  }
+
   toggleTrainingPause(): void {
     this.state.isTrainingPaused = !this.state.isTrainingPaused;
     this.notify();
+  }
+
+  setEpisodeLimit(count: number): void {
+    if (count <= 0) return;
+    this.state.episodesRemaining = count;
+    this.state.episodeBatchTotal = count;
+    this.state.episodeTarget = this.agent.metrics.episode + count;
+    this.state.isTrainingPaused = false;
+    this.state.statusMessage = `Target batch started: Running ${count} episodes...`;
+    this.notify();
+  }
+
+  clearEpisodeLimit(): void {
+    this.state.episodesRemaining = null;
+    this.state.episodeBatchTotal = null;
+    this.state.episodeTarget = null;
+    this.notify();
+  }
+
+  private onEpisodeCompleted(): void {
+    if (this.state.episodesRemaining !== null) {
+      this.state.episodesRemaining--;
+      if (this.state.episodesRemaining <= 0) {
+        this.state.isTrainingPaused = true;
+        this.state.statusMessage = `Target Reached! Completed batch of ${this.agent.metrics.episode} total episodes. Simulation paused.`;
+        this.state.episodesRemaining = null;
+        this.state.episodeBatchTotal = null;
+        this.state.episodeTarget = null;
+        soundManager.playWin();
+      }
+    }
   }
 
   setupTrainingScenario(): void {
@@ -189,10 +231,51 @@ export class GameManager {
   }
 
   /**
+   * Reset the AI model (blank tabula-rasa brain or pretrained baseline)
+   */
+  trainResetAI(blank = true): void {
+    if (blank) {
+      this.agent.resetToBlank();
+      this.state.statusMessage = 'AI Model Reset: Fresh Blank Brain created (knows basically nothing).';
+    } else {
+      this.agent.resetToPretrained();
+      this.state.statusMessage = 'AI Model Reset: Pretrained baseline heuristics restored.';
+    }
+    this.state.lastShotReward = null;
+    this.clearEpisodeLimit();
+    this.setupTrainingScenario();
+    this.notify();
+  }
+
+  /**
+   * Load AI model weights and metrics from JSON
+   */
+  loadBrain(jsonStr: string, fileName?: string): { success: boolean; message: string } {
+    const res = this.agent.loadBrain(jsonStr, fileName);
+    if (res.success) {
+      this.clearEpisodeLimit();
+      this.state.statusMessage = `Brain Loaded: Ep #${this.agent.metrics.episode} model ready!`;
+      this.computeAICandidates(this.state.mode === 'match' ? this.state.playerType : 'any');
+      this.notify();
+    }
+    return res;
+  }
+
+  /**
+   * Save AI model weights and metrics
+   */
+  saveBrain(): { json: string; filename: string } {
+    const json = this.agent.exportBrain();
+    const filename = `pool_rl_brain_ep${this.agent.metrics.episode}.json`;
+    return { json, filename };
+  }
+
+  /**
    * Player fires a shot
    */
   executePlayerShot(angle: number, power: number): void {
-    if (this.state.isSimulating || this.state.turn !== 'player' || this.state.winner) return;
+    if (this.state.isSimulating || this.state.winner) return;
+    if (this.state.mode === 'match' && this.state.turn !== 'player') return;
 
     this.resetShotResult();
     soundManager.playCue(power);
@@ -277,14 +360,16 @@ export class GameManager {
   }
 
   private tickTraining(): void {
-    if (this.state.isTrainingPaused) return;
+    if (this.state.isTrainingPaused && !this.state.isSimulating) return;
 
     const speed = this.state.trainingSpeed;
 
     if (speed >= 100) {
       // Headless turbo training: run multiple entire episodes per frame
       for (let ep = 0; ep < 12; ep++) {
+        if (this.state.isTrainingPaused) break;
         this.runSingleTrainingEpisodeHeadless();
+        if (this.state.isTrainingPaused) break;
       }
       this.notify();
       return;
@@ -390,6 +475,7 @@ export class GameManager {
 
     const won = result.pottedBalls.some((b) => b.number === 8);
     this.agent.recordEpisode(reward, won, result.pottedBalls.filter((b) => b.number !== 0).length, loss);
+    this.onEpisodeCompleted();
     this.notify();
   }
 
@@ -442,6 +528,7 @@ export class GameManager {
     const loss = this.agent.trainStep();
     const won = result.pottedBalls.some((b) => b.number === 8);
     this.agent.recordEpisode(reward, won, result.pottedBalls.filter((b) => b.number !== 0).length, loss);
+    this.onEpisodeCompleted();
   }
 
   private evaluateMatchTurn(result: ShotResult): void {

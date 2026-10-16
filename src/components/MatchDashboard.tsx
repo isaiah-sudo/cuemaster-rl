@@ -101,6 +101,17 @@ export const MatchDashboard: React.FC<MatchDashboardProps> = ({ game }) => {
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-sm text-zinc-100">Deep RL Agent</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-mono border ${
+                    game.agent.brainType === 'blank'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                      : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                  }`}
+                >
+                  {game.agent.brainType === 'blank'
+                    ? `Blank Brain (${game.agent.metrics.episode} eps)`
+                    : `Trained (Ep ${game.agent.metrics.episode})`}
+                </span>
                 {turn === 'ai' && !winner && (
                   <span className="px-2 py-0.5 text-[10px] uppercase font-bold bg-indigo-500 text-white rounded-full animate-pulse">
                     Evaluating...
