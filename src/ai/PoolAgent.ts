@@ -24,12 +24,18 @@ export interface CandidateShot {
 export interface TrainingMetrics {
   episode: number;
   totalPots: number;
+  successfulPotsEpisodes: number;
   winCount: number;
   epsilon: number;
   loss: number;
   recentRewards: number[];
   averageReward: number;
   recentWinRate: number;
+  recentPotsHistory: number[];       // 1 if potted, 0 if missed
+  recentPotRatesHistory: number[];   // Rolling % of pots made over episodes
+  recentWindowSize: number;          // e.g. 20, 50, 100
+  recentPotPercentage: number;       // % pots made in recent window
+  overallPotPercentage: number;      // % pots made across all episodes
 }
 
 export type BrainType = 'blank' | 'pretrained' | 'loaded';
@@ -52,12 +58,18 @@ export class PoolAgent {
   metrics: TrainingMetrics = {
     episode: 0,
     totalPots: 0,
+    successfulPotsEpisodes: 0,
     winCount: 0,
     epsilon: 0.25,
     loss: 0,
     recentRewards: [],
     averageReward: 0,
     recentWinRate: 0,
+    recentPotsHistory: [],
+    recentPotRatesHistory: [],
+    recentWindowSize: 50,
+    recentPotPercentage: 0,
+    overallPotPercentage: 0,
   };
 
   constructor() {
@@ -409,6 +421,10 @@ export class PoolAgent {
   recordEpisode(reward: number, won: boolean, pots: number, loss: number): void {
     this.metrics.episode++;
     this.metrics.totalPots += pots;
+    const madePot = pots > 0 ? 1 : 0;
+    if (madePot) {
+      this.metrics.successfulPotsEpisodes++;
+    }
     if (won) this.metrics.winCount++;
     this.metrics.loss = loss;
     this.metrics.epsilon = this.epsilon;
@@ -420,6 +436,39 @@ export class PoolAgent {
     const sum = this.metrics.recentRewards.reduce((a, b) => a + b, 0);
     this.metrics.averageReward = Math.round((sum / this.metrics.recentRewards.length) * 10) / 10;
     this.metrics.recentWinRate = Math.round((this.metrics.winCount / Math.max(1, this.metrics.episode)) * 100);
+
+    // Track pot success history
+    this.metrics.recentPotsHistory.push(madePot);
+    if (this.metrics.recentPotsHistory.length > 100) {
+      this.metrics.recentPotsHistory.shift();
+    }
+
+    // Calculate recent pot percentage using configured window
+    const windowItems = this.metrics.recentPotsHistory.slice(-this.metrics.recentWindowSize);
+    const windowSuccesses = windowItems.reduce((a, b) => a + b, 0);
+    this.metrics.recentPotPercentage = windowItems.length > 0
+      ? Math.round((windowSuccesses / windowItems.length) * 100)
+      : 0;
+
+    // Calculate overall pot percentage
+    this.metrics.overallPotPercentage = Math.round(
+      (this.metrics.successfulPotsEpisodes / Math.max(1, this.metrics.episode)) * 100
+    );
+
+    // Record rolling pot percentage history for chart
+    this.metrics.recentPotRatesHistory.push(this.metrics.recentPotPercentage);
+    if (this.metrics.recentPotRatesHistory.length > 60) {
+      this.metrics.recentPotRatesHistory.shift();
+    }
+  }
+
+  setWindowSize(size: number): void {
+    this.metrics.recentWindowSize = size;
+    const windowItems = this.metrics.recentPotsHistory.slice(-size);
+    const windowSuccesses = windowItems.reduce((a, b) => a + b, 0);
+    this.metrics.recentPotPercentage = windowItems.length > 0
+      ? Math.round((windowSuccesses / windowItems.length) * 100)
+      : 0;
   }
 
   /**
@@ -435,12 +484,18 @@ export class PoolAgent {
     this.metrics = {
       episode: 0,
       totalPots: 0,
+      successfulPotsEpisodes: 0,
       winCount: 0,
       epsilon: 0.95,
       loss: 0,
       recentRewards: [],
       averageReward: 0,
       recentWinRate: 0,
+      recentPotsHistory: [],
+      recentPotRatesHistory: [],
+      recentWindowSize: 50,
+      recentPotPercentage: 0,
+      overallPotPercentage: 0,
     };
   }
 
@@ -458,12 +513,18 @@ export class PoolAgent {
     this.metrics = {
       episode: 0,
       totalPots: 0,
+      successfulPotsEpisodes: 0,
       winCount: 0,
       epsilon: 0.35,
       loss: 0,
       recentRewards: [],
       averageReward: 0,
       recentWinRate: 0,
+      recentPotsHistory: [],
+      recentPotRatesHistory: [],
+      recentWindowSize: 50,
+      recentPotPercentage: 0,
+      overallPotPercentage: 0,
     };
   }
 
@@ -482,12 +543,18 @@ export class PoolAgent {
       metrics: {
         episode: this.metrics.episode,
         totalPots: this.metrics.totalPots,
+        successfulPotsEpisodes: this.metrics.successfulPotsEpisodes,
         winCount: this.metrics.winCount,
         epsilon: this.epsilon,
         loss: this.metrics.loss,
         recentRewards: [...this.metrics.recentRewards],
         averageReward: this.metrics.averageReward,
         recentWinRate: this.metrics.recentWinRate,
+        recentPotsHistory: [...this.metrics.recentPotsHistory],
+        recentPotRatesHistory: [...this.metrics.recentPotRatesHistory],
+        recentWindowSize: this.metrics.recentWindowSize,
+        recentPotPercentage: this.metrics.recentPotPercentage,
+        overallPotPercentage: this.metrics.overallPotPercentage,
       },
       qNetwork: JSON.parse(this.qNetwork.toJSON()),
     };
@@ -511,12 +578,18 @@ export class PoolAgent {
         this.metrics = {
           episode: typeof m.episode === 'number' ? m.episode : 0,
           totalPots: typeof m.totalPots === 'number' ? m.totalPots : 0,
+          successfulPotsEpisodes: typeof m.successfulPotsEpisodes === 'number' ? m.successfulPotsEpisodes : 0,
           winCount: typeof m.winCount === 'number' ? m.winCount : 0,
           epsilon: typeof m.epsilon === 'number' ? m.epsilon : this.epsilon,
           loss: typeof m.loss === 'number' ? m.loss : 0,
           recentRewards: Array.isArray(m.recentRewards) ? [...m.recentRewards] : [],
           averageReward: typeof m.averageReward === 'number' ? m.averageReward : 0,
           recentWinRate: typeof m.recentWinRate === 'number' ? m.recentWinRate : 0,
+          recentPotsHistory: Array.isArray(m.recentPotsHistory) ? [...m.recentPotsHistory] : [],
+          recentPotRatesHistory: Array.isArray(m.recentPotRatesHistory) ? [...m.recentPotRatesHistory] : [],
+          recentWindowSize: typeof m.recentWindowSize === 'number' ? m.recentWindowSize : 50,
+          recentPotPercentage: typeof m.recentPotPercentage === 'number' ? m.recentPotPercentage : 0,
+          overallPotPercentage: typeof m.overallPotPercentage === 'number' ? m.overallPotPercentage : 0,
         };
         if ('epsilon' in data && typeof data.epsilon === 'number') {
           this.epsilon = Math.max(this.minEpsilon, Math.min(0.99, data.epsilon));
@@ -538,12 +611,18 @@ export class PoolAgent {
         this.metrics = {
           episode: ep,
           totalPots: 0,
+          successfulPotsEpisodes: 0,
           winCount: 0,
           epsilon: this.epsilon,
           loss: 0,
           recentRewards: [],
           averageReward: 0,
           recentWinRate: 0,
+          recentPotsHistory: [],
+          recentPotRatesHistory: [],
+          recentWindowSize: 50,
+          recentPotPercentage: 0,
+          overallPotPercentage: 0,
         };
       }
 

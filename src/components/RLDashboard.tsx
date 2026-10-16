@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { GameManager, type TrainingScenario } from '../game/GameManager';
-import { Play, Pause, RotateCcw, Download, Upload, Zap, Activity, Target, Brain, RefreshCw, AlertTriangle, Check, X, CheckCircle2 } from 'lucide-react';
+import { Play, Pause, RotateCcw, Download, Upload, Zap, Activity, Target, Brain, RefreshCw, AlertTriangle, Check, X, CheckCircle2, Percent, Crosshair } from 'lucide-react';
 
 interface RLDashboardProps {
   game: GameManager;
@@ -11,6 +11,9 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
   const [customBatchInput, setCustomBatchInput] = useState<string>('100');
+
+  // Tab mode for chart: pot success rate % vs raw TD reward
+  const [chartMode, setChartMode] = useState<'potRate' | 'reward'>('potRate');
 
   // Subscribe to game updates so telemetry and chart update in real time
   const [, setTick] = useState(0);
@@ -24,7 +27,12 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
   const metrics = game.agent.metrics;
   const { trainingSpeed, isTrainingPaused, trainingScenario, lastShotReward } = game.state;
 
-  // Render live reward graph on canvas
+  const handleWindowChange = (size: number) => {
+    game.agent.setWindowSize(size);
+    setTick((t) => t + 1);
+  };
+
+  // Render live chart on canvas
   useEffect(() => {
     const canvas = chartCanvasRef.current;
     if (!canvas) return;
@@ -35,83 +43,169 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    // Background grid
-    ctx.strokeStyle = '#27272a';
-    ctx.lineWidth = 1;
-    for (let y = 20; y < h; y += 30) {
+    if (chartMode === 'potRate') {
+      // --- POT SUCCESS RATE % CHART ---
+      // Grid lines at 0%, 25%, 50%, 75%, 100%
+      ctx.strokeStyle = '#27272a';
+      ctx.lineWidth = 1;
+      const levels = [0, 25, 50, 75, 100];
+      for (const level of levels) {
+        const y = h - (level / 100) * (h - 24) - 12;
+        ctx.beginPath();
+        ctx.moveTo(28, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+
+        ctx.fillStyle = '#71717a';
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${level}%`, 24, y + 3);
+      }
+
+      // 50% benchmark reference line (amber/subtle)
+      const benchmarkY = h - 0.5 * (h - 24) - 12;
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.25)';
+      ctx.setLineDash([3, 3]);
       ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
+      ctx.moveTo(28, benchmarkY);
+      ctx.lineTo(w, benchmarkY);
       ctx.stroke();
-    }
+      ctx.setLineDash([]);
 
-    const rewards = metrics.recentRewards;
-    if (rewards.length === 0) {
-      ctx.fillStyle = '#71717a';
-      ctx.font = '12px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Training in progress... Collecting first shot', w / 2, h / 2);
-      return;
-    }
+      const data = metrics.recentPotRatesHistory;
+      if (data.length === 0) {
+        ctx.fillStyle = '#71717a';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Training in progress... Measuring pot rate', w / 2 + 10, h / 2);
+        return;
+      }
 
-    const minR = Math.min(-50, ...rewards);
-    const maxR = Math.max(150, ...rewards);
-    const range = Math.max(1, maxR - minR);
+      if (data.length === 1) {
+        const y = h - (data[0] / 100) * (h - 24) - 12;
+        ctx.fillStyle = '#06b6d4';
+        ctx.beginPath();
+        ctx.arc(w / 2, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText(`${data[0]}%`, w / 2, y - 8);
+        return;
+      }
 
-    // Draw zero-line
-    const zeroY = h - ((0 - minR) / range) * (h - 20) - 10;
-    ctx.strokeStyle = '#52525b';
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.moveTo(0, zeroY);
-    ctx.lineTo(w, zeroY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    if (rewards.length === 1) {
-      const y = h - ((rewards[0] - minR) / range) * (h - 20) - 10;
-      ctx.fillStyle = '#10b981';
+      // Draw potting % curve
       ctx.beginPath();
-      ctx.arc(w / 2, y, 5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#06b6d4'; // Cyan curve
+      ctx.lineWidth = 2.5;
+
+      const chartLeft = 32;
+      const chartWidth = w - chartLeft - 8;
+
+      for (let i = 0; i < data.length; i++) {
+        const x = chartLeft + (i / (data.length - 1)) * chartWidth;
+        const y = h - (data[i] / 100) * (h - 24) - 12;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Fill gradient under curve
+      ctx.lineTo(chartLeft + chartWidth, h - 12);
+      ctx.lineTo(chartLeft, h - 12);
+      ctx.closePath();
+      const fillGrad = ctx.createLinearGradient(0, 0, 0, h);
+      fillGrad.addColorStop(0, 'rgba(6, 182, 212, 0.35)');
+      fillGrad.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      ctx.fillStyle = fillGrad;
       ctx.fill();
-      ctx.fillText(`${rewards[0]}`, w / 2, y - 8);
-      return;
-    }
 
-    // Draw reward line
-    ctx.beginPath();
-    ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = 2.5;
-
-    for (let i = 0; i < rewards.length; i++) {
-      const x = (i / (rewards.length - 1)) * (w - 14) + 7;
-      const y = h - ((rewards[i] - minR) / range) * (h - 20) - 10;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Fill gradient under curve
-    ctx.lineTo(w - 7, h);
-    ctx.lineTo(7, h);
-    ctx.closePath();
-    const fillGrad = ctx.createLinearGradient(0, 0, 0, h);
-    fillGrad.addColorStop(0, 'rgba(16, 185, 129, 0.3)');
-    fillGrad.addColorStop(1, 'rgba(16, 185, 129, 0)');
-    ctx.fillStyle = fillGrad;
-    ctx.fill();
-
-    // Draw dots for the latest 5 rewards
-    const startDot = Math.max(0, rewards.length - 5);
-    for (let i = startDot; i < rewards.length; i++) {
-      const x = (i / (rewards.length - 1)) * (w - 14) + 7;
-      const y = h - ((rewards[i] - minR) / range) * (h - 20) - 10;
+      // Current point highlight
+      const lastX = chartLeft + chartWidth;
+      const lastY = h - (data[data.length - 1] / 100) * (h - 24) - 12;
       ctx.beginPath();
-      ctx.arc(x, y, i === rewards.length - 1 ? 4 : 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = i === rewards.length - 1 ? '#34d399' : '#10b981';
+      ctx.arc(lastX, lastY, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#22d3ee';
       ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else {
+      // --- REWARD CURVE CHART ---
+      ctx.strokeStyle = '#27272a';
+      ctx.lineWidth = 1;
+      for (let y = 20; y < h; y += 30) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+
+      const rewards = metrics.recentRewards;
+      if (rewards.length === 0) {
+        ctx.fillStyle = '#71717a';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Training in progress... Collecting first shot', w / 2, h / 2);
+        return;
+      }
+
+      const minR = Math.min(-50, ...rewards);
+      const maxR = Math.max(150, ...rewards);
+      const range = Math.max(1, maxR - minR);
+
+      // Draw zero-line
+      const zeroY = h - ((0 - minR) / range) * (h - 20) - 10;
+      ctx.strokeStyle = '#52525b';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(0, zeroY);
+      ctx.lineTo(w, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (rewards.length === 1) {
+        const y = h - ((rewards[0] - minR) / range) * (h - 20) - 10;
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(w / 2, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText(`${rewards[0]}`, w / 2, y - 8);
+        return;
+      }
+
+      // Draw reward line
+      ctx.beginPath();
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 2.5;
+
+      for (let i = 0; i < rewards.length; i++) {
+        const x = (i / (rewards.length - 1)) * (w - 14) + 7;
+        const y = h - ((rewards[i] - minR) / range) * (h - 20) - 10;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Fill gradient under curve
+      ctx.lineTo(w - 7, h);
+      ctx.lineTo(7, h);
+      ctx.closePath();
+      const fillGrad = ctx.createLinearGradient(0, 0, 0, h);
+      fillGrad.addColorStop(0, 'rgba(16, 185, 129, 0.3)');
+      fillGrad.addColorStop(1, 'rgba(16, 185, 129, 0)');
+      ctx.fillStyle = fillGrad;
+      ctx.fill();
+
+      // Draw dots for the latest 5 rewards
+      const startDot = Math.max(0, rewards.length - 5);
+      for (let i = startDot; i < rewards.length; i++) {
+        const x = (i / (rewards.length - 1)) * (w - 14) + 7;
+        const y = h - ((rewards[i] - minR) / range) * (h - 20) - 10;
+        ctx.beginPath();
+        ctx.arc(x, y, i === rewards.length - 1 ? 4 : 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = i === rewards.length - 1 ? '#34d399' : '#10b981';
+        ctx.fill();
+      }
     }
-  }, [metrics.recentRewards, metrics.episode]);
+  }, [chartMode, metrics.recentRewards, metrics.recentPotRatesHistory, metrics.episode]);
 
   const [loadFeedback, setLoadFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -199,6 +293,58 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
           </span>
         </div>
 
+        {/* --- DEDICATED POT PERCENTAGE INDICATOR --- */}
+        <div className="p-3 bg-gradient-to-br from-cyan-950/40 to-emerald-950/40 rounded-xl border border-cyan-500/30 shadow-inner">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] uppercase font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
+              <Crosshair className="w-3.5 h-3.5 text-cyan-400" /> Pot Success Rate
+            </span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-xl font-black font-mono text-cyan-200">
+                {metrics.recentPotPercentage}%
+              </span>
+              <span className="text-[10px] text-zinc-400 font-normal">
+                (Last {metrics.recentWindowSize} ep)
+              </span>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-zinc-800/80 h-2.5 rounded-full overflow-hidden p-0.5 border border-zinc-700/50">
+            <div
+              className={`h-full transition-all duration-300 rounded-full ${
+                metrics.recentPotPercentage >= 60
+                  ? 'bg-gradient-to-r from-teal-400 to-emerald-400'
+                  : metrics.recentPotPercentage >= 30
+                  ? 'bg-gradient-to-r from-amber-400 to-yellow-400'
+                  : 'bg-gradient-to-r from-rose-500 to-orange-400'
+              }`}
+              style={{ width: `${Math.min(100, Math.max(0, metrics.recentPotPercentage))}%` }}
+            />
+          </div>
+
+          {/* Window size buttons & All-time comparison */}
+          <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-zinc-800/80 text-[10px] text-zinc-400">
+            <span>Window:</span>
+            <div className="flex items-center gap-1">
+              {[20, 50, 100].map((size) => (
+                <button
+                  key={size}
+                  onClick={() => handleWindowChange(size)}
+                  className={`px-1.5 py-0.5 rounded font-mono font-bold transition ${
+                    metrics.recentWindowSize === size
+                      ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/50'
+                      : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {size}ep
+                </button>
+              ))}
+            </div>
+            <span>All-time: <strong className="text-zinc-200 font-mono">{metrics.overallPotPercentage}%</strong></span>
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-2 text-center">
           <div className="p-2.5 bg-zinc-900 rounded-lg border border-zinc-800">
             <div className="text-[10px] text-zinc-400 uppercase font-semibold">Episodes</div>
@@ -249,13 +395,36 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
         )}
       </div>
 
-      {/* 2. Live Reward Curve Chart */}
+      {/* 2. Live Chart (Toggleable: Pot % Curve vs Reward Curve) */}
       <div className="flex flex-col gap-2 p-4 bg-zinc-950/60 rounded-xl border border-zinc-800/60">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-          <span className="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center gap-1.5">
-            <Zap className="w-4 h-4" /> Reward Curve (Last 50 Episodes)
+          {/* Chart mode tabs */}
+          <div className="flex items-center gap-1 p-0.5 bg-zinc-900 rounded-lg border border-zinc-800">
+            <button
+              onClick={() => setChartMode('potRate')}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-bold transition ${
+                chartMode === 'potRate'
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <Percent className="w-3 h-3" /> Potting %
+            </button>
+            <button
+              onClick={() => setChartMode('reward')}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-bold transition ${
+                chartMode === 'reward'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <Zap className="w-3 h-3" /> Reward
+            </button>
+          </div>
+
+          <span className="text-[10px] text-zinc-400 font-medium">
+            {chartMode === 'potRate' ? `Per ${metrics.recentWindowSize} Episodes` : 'Rolling TD Target'}
           </span>
-          <span className="text-[10px] text-zinc-400">Rolling TD Target</span>
         </div>
 
         <div className="relative flex-1 w-full min-h-[140px] flex items-center justify-center">
@@ -268,8 +437,17 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
         </div>
 
         <div className="flex justify-between text-[11px] text-zinc-400 px-1">
-          <span>Min: -50 (Foul/Scratch)</span>
-          <span className="text-emerald-400 font-semibold">Max: +150 (Pot + Leave)</span>
+          {chartMode === 'potRate' ? (
+            <>
+              <span>0% (All Misses)</span>
+              <span className="text-cyan-400 font-semibold">100% (Every Shot Potted)</span>
+            </>
+          ) : (
+            <>
+              <span>Min: -50 (Foul/Scratch)</span>
+              <span className="text-emerald-400 font-semibold">Max: +150 (Pot + Leave)</span>
+            </>
+          )}
         </div>
       </div>
 
