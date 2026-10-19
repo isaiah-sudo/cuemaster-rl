@@ -93,6 +93,41 @@ export class Table {
     }
   }
 
+  setupBeginnerPotDrill(): void {
+    this.balls = [];
+    // Pick corner pocket 2 (Top-Right) or pocket 5 (Bottom-Right)
+    const pocket = Math.random() > 0.5 ? this.pockets[2] : this.pockets[5];
+    const isTop = pocket.pos.y < TABLE_CONFIG.FELT_Y + TABLE_CONFIG.FELT_HEIGHT / 2;
+
+    // Target ball near pocket (about 120px away)
+    const targetX = pocket.pos.x - 120 - Math.random() * 40;
+    const targetY = isTop ? pocket.pos.y + 60 + Math.random() * 30 : pocket.pos.y - 60 - Math.random() * 30;
+    const targetBall = new Ball(1, targetX, targetY);
+    this.balls.push(targetBall);
+
+    // Cue ball positioned ~220px behind target ball
+    const toPocket = pocket.pos.sub(targetBall.pos).normalize();
+    const cuePos = targetBall.pos.sub(toPocket.mult(200 + Math.random() * 50));
+    // Add slight offset so it's not a dead straight line (requiring small cut angle)
+    cuePos.y += (Math.random() - 0.5) * 35;
+
+    this.balls.unshift(new Ball(0, cuePos.x, cuePos.y));
+  }
+
+  setupCutShotDrill(): void {
+    this.balls = [];
+    // Target ball at center-right
+    const targetX = TABLE_CONFIG.FELT_X + TABLE_CONFIG.FELT_WIDTH * 0.65;
+    const targetY = TABLE_CONFIG.FELT_Y + TABLE_CONFIG.FELT_HEIGHT * 0.38 + (Math.random() - 0.5) * 40;
+    const targetBall = new Ball(3, targetX, targetY);
+    this.balls.push(targetBall);
+
+    // Cue ball placed to create a distinct 35-45 degree cut into the top-center or corner pocket
+    const cueX = targetX - 180 - Math.random() * 40;
+    const cueY = targetY + 110 + Math.random() * 40;
+    this.balls.unshift(new Ball(0, cueX, cueY));
+  }
+
   isSimulating(): boolean {
     return this.balls.some((b) => b.isMoving());
   }

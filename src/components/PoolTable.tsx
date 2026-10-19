@@ -180,6 +180,55 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
 
       ctx.restore();
     }
+
+    // Draw Aim Uncertainty Cone for the chosen shot
+    if (current) {
+      const uncertainty = game.agent.getAimUncertainty(
+        game.state.mode === 'match' ? game.state.matchDifficulty : undefined
+      );
+
+      ctx.save();
+      const spread = uncertainty.angleStd;
+      const coneDist = 220;
+      const baseAngle = current.cueAngle;
+
+      // Draw cone wedge from cue ball
+      ctx.beginPath();
+      ctx.moveTo(cue.pos.x, cue.pos.y);
+      ctx.arc(cue.pos.x, cue.pos.y, coneDist, baseAngle - spread, baseAngle + spread);
+      ctx.closePath();
+
+      // Style cone based on rank level
+      if (uncertainty.rankLevel <= 2) {
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.55)';
+        ctx.setLineDash([4, 4]);
+      } else if (uncertainty.rankLevel === 3) {
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
+        ctx.setLineDash([3, 3]);
+      } else {
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.16)';
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.75)';
+        ctx.setLineDash([]);
+      }
+      ctx.lineWidth = 1.5;
+      ctx.fill();
+      ctx.stroke();
+
+      // Variance indicator badge below cue ball
+      const spreadDeg = ((spread * 180) / Math.PI).toFixed(1);
+      ctx.fillStyle = uncertainty.rankLevel <= 2 ? '#f87171' : uncertainty.rankLevel === 3 ? '#fbbf24' : '#34d399';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(
+        `Aim Variance: ±${spreadDeg}° (${uncertainty.rankTitle})`,
+        cue.pos.x,
+        cue.pos.y + 24
+      );
+
+      ctx.restore();
+    }
   };
 
   const drawPlayerAimAssist = (ctx: CanvasRenderingContext2D) => {
@@ -585,7 +634,7 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
         </div>
 
         {/* Shot Lock / Aim State Banner (Top Right) */}
-        {isPlayerCanShoot && (
+        {isPlayerCanShoot ? (
           <div className="absolute top-4 right-6 flex items-center gap-2">
             {isAimLocked ? (
               <div className="px-3 py-1.5 rounded-full text-xs font-bold tracking-wide border shadow-lg flex items-center gap-1.5 bg-amber-500/25 border-amber-500/60 text-amber-300 backdrop-blur-md animate-pulse">
@@ -599,7 +648,16 @@ export const PoolTable: React.FC<PoolTableProps> = ({ game }) => {
               </div>
             )}
           </div>
-        )}
+        ) : game.state.aiThought ? (
+          <div className="absolute top-4 right-6 flex items-center gap-2 max-w-sm pointer-events-none">
+            <div className="px-3 py-1.5 rounded-full text-xs font-medium bg-stone-900/85 border border-stone-700/80 text-amber-200 backdrop-blur-md shadow-lg flex items-center gap-2">
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-bold text-[10px] uppercase tracking-wider border border-amber-500/30 whitespace-nowrap">
+                {game.state.aiRankTitle || 'AI'}
+              </span>
+              <span className="italic truncate">"{game.state.aiThought}"</span>
+            </div>
+          </div>
+        ) : null}
 
         {/* Foul banner alert */}
         {game.state.foulMessage && (

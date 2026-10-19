@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { GameManager, type TrainingScenario } from '../game/GameManager';
-import { Play, Pause, RotateCcw, Download, Upload, Zap, Activity, Target, Brain, RefreshCw, AlertTriangle, Check, X, CheckCircle2, Percent, Crosshair } from 'lucide-react';
+import { Play, Pause, RotateCcw, Download, Upload, Zap, Activity, Target, Brain, RefreshCw, AlertTriangle, Check, X, CheckCircle2, Percent, Crosshair, Award } from 'lucide-react';
 
 interface RLDashboardProps {
   game: GameManager;
@@ -293,6 +293,38 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
           </span>
         </div>
 
+        {/* AI Mastery Rank & Aim Precision */}
+        {(() => {
+          const unc = game.agent.getAimUncertainty();
+          const angleDeg = ((unc.angleStd * 180) / Math.PI).toFixed(1);
+          return (
+            <div className="p-2.5 bg-gradient-to-r from-purple-950/40 via-indigo-950/40 to-zinc-900 rounded-xl border border-indigo-500/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Award className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-bold text-zinc-100">
+                    Lv.{unc.rankLevel} {unc.rankTitle}
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono font-semibold text-amber-300">
+                  Aim Spread: ±{angleDeg}°
+                </span>
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <div className="flex-1 bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-indigo-500 via-amber-400 to-emerald-400 transition-all duration-300 rounded-full"
+                    style={{ width: `${unc.progressToNext}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  {unc.progressToNext}% to {unc.rankLevel >= 5 ? 'MAX' : `Lv.${unc.rankLevel + 1}`}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* --- DEDICATED POT PERCENTAGE INDICATOR --- */}
         <div className="p-3 bg-gradient-to-br from-cyan-950/40 to-emerald-950/40 rounded-xl border border-cyan-500/30 shadow-inner">
           <div className="flex items-center justify-between mb-1.5">
@@ -462,10 +494,11 @@ export const RLDashboard: React.FC<RLDashboardProps> = ({ game }) => {
         {/* Training Scenarios */}
         <div className="flex flex-col gap-1.5">
           <label className="text-[11px] font-semibold text-zinc-400 uppercase">Training Curriculum:</label>
-          <div className="grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
             {(
               [
                 ['potting_drill', '🎯 1-Ball Pot'],
+                ['cut_shot', '📐 Cut Angle'],
                 ['multi_ball', '🎱 4-Ball Drill'],
                 ['full_game', '🏆 Full Rack'],
               ] as [TrainingScenario, string][]

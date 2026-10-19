@@ -40,16 +40,25 @@ export interface TrainingMetrics {
 
 export type BrainType = 'blank' | 'pretrained' | 'loaded';
 
+export interface AimUncertainty {
+  angleStd: number;       // In radians
+  powerStd: number;       // In px/frame
+  rankTitle: string;
+  rankLevel: number;      // 1 to 5
+  progressToNext: number; // 0 to 100%
+  thoughtComment: string; // Witty thought commentary for UI
+}
+
 export class PoolAgent {
   qNetwork: NeuralNetwork;
   targetNetwork: NeuralNetwork;
   replayBuffer: ReplayBuffer;
-  brainType: BrainType = 'pretrained';
+  brainType: BrainType = 'blank';
 
   // Hyperparameters
-  epsilon = 0.25;
+  epsilon = 0.65;
   minEpsilon = 0.05;
-  epsilonDecay = 0.998;
+  epsilonDecay = 0.996;
   gamma = 0.95; // Discount factor
   batchSize = 32;
   learningRate = 0.003;
@@ -60,7 +69,7 @@ export class PoolAgent {
     totalPots: 0,
     successfulPotsEpisodes: 0,
     winCount: 0,
-    epsilon: 0.25,
+    epsilon: 0.65,
     loss: 0,
     recentRewards: [],
     averageReward: 0,
@@ -78,9 +87,7 @@ export class PoolAgent {
     this.qNetwork = new NeuralNetwork(layerSizes, this.learningRate);
     this.targetNetwork = this.qNetwork.clone();
     this.replayBuffer = new ReplayBuffer(6000);
-
-    // Warm-start neural network with realistic billiard intuition
-    this.initializeBaselineWeights();
+    this.brainType = 'blank';
   }
 
   private initializeBaselineWeights(): void {
@@ -285,24 +292,118 @@ export class PoolAgent {
     return 1; // Clear path
   }
 
-  /**
-   * Selects an action using epsilon-greedy policy
-   */
-  selectAction(candidates: CandidateShot[], explore = true): CandidateShot | null {
-    if (candidates.length === 0) return null;
-
-    if (explore && Math.random() < this.epsilon) {
-      // Explore: choose a random candidate with slight perturbation
-      const idx = Math.floor(Math.random() * Math.min(candidates.length, 5));
-      const chosen = { ...candidates[idx] };
-      // Add slight noise to angle (+/- 0.04 rad) and power (+/- 1.5)
-      chosen.cueAngle += (Math.random() - 0.5) * 0.07;
-      chosen.power = Math.max(TABLE_CONFIG.MIN_SHOT_POWER, Math.min(TABLE_CONFIG.MAX_SHOT_POWER, chosen.power + (Math.random() - 0.5) * 2));
-      return chosen;
+  getAimUncertainty(forceSkillLevel?: number): AimUncertainty {
+    if (forceSkillLevel === 1) {
+      return {
+        angleStd: 0.28,
+        powerStd: 7.5,
+        rankTitle: 'Rookie Amateur',
+        rankLevel: 1,
+        progressToNext: 25,
+        thoughtComment: "Still getting used to the table... shots might go wide!",
+      };
+    }
+    if (forceSkillLevel === 2) {
+      return {
+        angleStd: 0.10,
+        powerStd: 3.0,
+        rankTitle: 'Pub Hustler',
+        rankLevel: 3,
+        progressToNext: 65,
+        thoughtComment: "Decent spin and cut angle control. Playing solid pool.",
+      };
+    }
+    if (forceSkillLevel === 3) {
+      return {
+        angleStd: 0.008,
+        powerStd: 0.4,
+        rankTitle: 'Grandmaster Shark',
+        rankLevel: 5,
+        progressToNext: 100,
+        thoughtComment: "Laser precision. Every pocket mapped to the millimeter.",
+      };
     }
 
-    // Exploit: pick highest Q-value candidate
-    return candidates[0];
+    const ep = this.metrics.episode;
+    // Exponential decay of error variance as episodes increase:
+    // At ep 0: angleStd ~ 0.32 rad (18.3 degrees), powerStd ~ 8.0
+    // At ep 30: angleStd ~ 0.22 rad (12.6 degrees), powerStd ~ 5.5
+    // At ep 80: angleStd ~ 0.12 rad (6.9 degrees), powerStd ~ 3.0
+    // At ep 180: angleStd ~ 0.04 rad (2.3 degrees), powerStd ~ 1.2
+    // At ep 350+: angleStd ~ 0.008 rad (0.45 degrees), powerStd ~ 0.4
+    let baseAngle = 0.32 * Math.exp(-ep / 85) + 0.008;
+    let basePower = 8.0 * Math.exp(-ep / 85) + 0.4;
+
+    if (this.brainType === 'blank') {
+      baseAngle = Math.min(0.48, baseAngle * 1.25);
+      basePower = Math.min(10.0, basePower * 1.25);
+    }
+
+    let rankTitle = 'Bar Novice';
+    let rankLevel = 1;
+    let progressToNext = Math.min(100, Math.round((ep / 30) * 100));
+    let thoughtComment = "I have no idea what I'm doing... shooting wildly!";
+
+    if (ep >= 350) {
+      rankTitle = 'Grandmaster Shark';
+      rankLevel = 5;
+      progressToNext = 100;
+      thoughtComment = 'Laser lock-on. Optimal cut angle and position leave.';
+    } else if (ep >= 175) {
+      rankTitle = 'Tournament Pro';
+      rankLevel = 4;
+      progressToNext = Math.round(((ep - 175) / (350 - 175)) * 100);
+      thoughtComment = 'Consistent pocket targeting and controlled cue ball speed.';
+    } else if (ep >= 75) {
+      rankTitle = 'League Player';
+      rankLevel = 3;
+      progressToNext = Math.round(((ep - 75) / (175 - 75)) * 100);
+      thoughtComment = 'Getting the hang of cut angles. Aim is stabilizing.';
+    } else if (ep >= 25) {
+      rankTitle = 'Pub Hustler';
+      rankLevel = 2;
+      progressToNext = Math.round(((ep - 25) / (75 - 25)) * 100);
+      thoughtComment = 'Figuring out pocket trajectories. Hands still a bit shaky.';
+    }
+
+    return {
+      angleStd: baseAngle,
+      powerStd: basePower,
+      rankTitle,
+      rankLevel,
+      progressToNext,
+      thoughtComment,
+    };
+  }
+
+  /**
+   * Selects an action using epsilon-greedy policy with training-dependent execution accuracy
+   */
+  selectAction(candidates: CandidateShot[], explore = true, forceSkillLevel?: number): CandidateShot | null {
+    if (candidates.length === 0) return null;
+
+    let chosen: CandidateShot;
+    if (explore && Math.random() < this.epsilon) {
+      // Explore: pick from candidate pool
+      const idx = Math.floor(Math.random() * Math.min(candidates.length, 5));
+      chosen = { ...candidates[idx] };
+    } else {
+      // Exploit: pick highest Q-value candidate
+      chosen = { ...candidates[0] };
+    }
+
+    // Apply training-dependent execution error!
+    const uncertainty = this.getAimUncertainty(forceSkillLevel);
+    const angleErr = (Math.random() - 0.5) * 2 * uncertainty.angleStd;
+    const powerErr = (Math.random() - 0.5) * 2 * uncertainty.powerStd;
+
+    chosen.cueAngle += angleErr;
+    chosen.power = Math.max(
+      TABLE_CONFIG.MIN_SHOT_POWER,
+      Math.min(TABLE_CONFIG.MAX_SHOT_POWER, chosen.power + powerErr)
+    );
+
+    return chosen;
   }
 
   /**

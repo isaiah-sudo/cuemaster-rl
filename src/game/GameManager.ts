@@ -7,7 +7,7 @@ import confetti from 'canvas-confetti';
 export type GameMode = 'training' | 'match';
 export type PlayerTurn = 'player' | 'ai';
 export type BallAssignment = 'solid' | 'stripe' | 'any';
-export type TrainingScenario = 'potting_drill' | 'multi_ball' | 'full_game';
+export type TrainingScenario = 'potting_drill' | 'cut_shot' | 'multi_ball' | 'full_game';
 
 export interface GameState {
   mode: GameMode;
@@ -30,6 +30,9 @@ export interface GameState {
   episodeTarget: number | null;
   episodesRemaining: number | null;
   episodeBatchTotal: number | null;
+  aiRankTitle: string;
+  aiThought: string;
+  matchDifficulty: number; // 0 = current trained AI, 1 = Rookie, 2 = Hustler, 3 = Shark
 }
 
 export class GameManager {
@@ -98,6 +101,9 @@ export class GameManager {
       episodeTarget: null,
       episodesRemaining: null,
       episodeBatchTotal: null,
+      aiRankTitle: 'Bar Novice',
+      aiThought: 'Trying to find the cue stick...',
+      matchDifficulty: 0,
     };
 
     this.setupTrainingScenario();
@@ -185,7 +191,9 @@ export class GameManager {
     this.state.allCandidates = [];
 
     if (this.state.trainingScenario === 'potting_drill') {
-      this.table.setupDrillScenario(1);
+      this.table.setupBeginnerPotDrill();
+    } else if (this.state.trainingScenario === 'cut_shot') {
+      this.table.setupCutShotDrill();
     } else if (this.state.trainingScenario === 'multi_ball') {
       this.table.setupDrillScenario(4);
     } else {
@@ -194,6 +202,13 @@ export class GameManager {
 
     this.updateBallCounts();
     this.computeAICandidates('any');
+    this.notify();
+  }
+
+  setMatchDifficulty(diff: number): void {
+    this.state.matchDifficulty = diff;
+    const diffNames = ['Current Trained AI', 'Rookie (Amateur)', 'Hustler (Experienced)', 'Shark (Grandmaster)'];
+    this.state.statusMessage = `AI Difficulty set to: ${diffNames[diff] || 'Custom'}`;
     this.notify();
   }
 
@@ -303,8 +318,12 @@ export class GameManager {
       const candidates = this.agent.generateCandidates(this.table, assignment);
       this.state.allCandidates = candidates;
 
+      const uncertainty = this.agent.getAimUncertainty(this.state.matchDifficulty);
+      this.state.aiRankTitle = uncertainty.rankTitle;
+      this.state.aiThought = uncertainty.thoughtComment;
+
       // In match mode, use lower exploration for competent play
-      const shot = this.agent.selectAction(candidates, false);
+      const shot = this.agent.selectAction(candidates, false, this.state.matchDifficulty);
       if (!shot) {
         // Pass or fallback gentle tap
         this.resetShotResult();
@@ -416,6 +435,10 @@ export class GameManager {
       return;
     }
 
+    const uncertainty = this.agent.getAimUncertainty();
+    this.state.aiRankTitle = uncertainty.rankTitle;
+    this.state.aiThought = uncertainty.thoughtComment;
+
     const chosenShot = this.agent.selectAction(candidates, true);
     if (!chosenShot) {
       this.setupTrainingScenario();
@@ -491,6 +514,10 @@ export class GameManager {
       this.setupTrainingScenario();
       return;
     }
+
+    const uncertainty = this.agent.getAimUncertainty();
+    this.state.aiRankTitle = uncertainty.rankTitle;
+    this.state.aiThought = uncertainty.thoughtComment;
 
     const shot = this.agent.selectAction(candidates, true);
     if (!shot) {
